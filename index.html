@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Catapult Commander</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        #game-container {
+            position: relative;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+
+        #game-canvas {
+            display: block;
+            background: linear-gradient(180deg, #87CEEB 0%, #E0F6FF 100%);
+        }
+
+        #ui-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            padding: 15px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .ui-panel {
+            background: rgba(0, 0, 0, 0.7);
+            color: #fff;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            backdrop-filter: blur(5px);
+        }
+
+        .ui-panel span {
+            color: #FFD700;
+        }
+
+        #message-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            color: #fff;
+            padding: 40px 60px;
+            border-radius: 15px;
+            text-align: center;
+            display: none;
+            z-index: 20;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translate(-50%, -50%) scale(0.9); }
+            to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+        }
+
+        #message-overlay h2 {
+            font-size: 32px;
+            margin-bottom: 15px;
+            color: #FFD700;
+        }
+
+        #message-overlay p {
+            font-size: 18px;
+            margin-bottom: 25px;
+        }
+
+        #message-overlay button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+            border: none;
+            padding: 15px 40px;
+            font-size: 18px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            font-weight: bold;
+        }
+
+        #message-overlay button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="game-canvas" width="1200" height="700"></canvas>
+        <div id="ui-overlay">
+            <div class="ui-panel">Level: <span id="level-display">1</span></div>
+            <div class="ui-panel">Score: <span id="score-display">0</span></div>
+            <div class="ui-panel">Shots: <span id="shots-display">5</span></div>
+        </div>
+        <div id="message-overlay">
+            <h2 id="message-title">Catapult Commander</h2>
+            <p id="message-text">Destroy all targets to advance!</p>
+            <button id="action-button">Start Game</button>
+        </div>
+    </div>
+
+    <!-- Matter.js Physics Engine - MIT License (https://github.com/liabru/matter-js) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    
+    <script>
+        /**
+         * Catapult Commander
+         * A physics-based catapult game using Matter.js
+         * 
+         * Assets & Resources:
+         * - Matter.js: MIT License (https://github.com/liabru/matter-js)
+         * - All graphics are procedurally generated using Canvas API
+         * - No external assets required
+         * 
+         * Design inspired by Angry Birds mechanics and open-source catapult game examples
+         */
+
+        // Module aliases for Matter.js
+        const Engine = Matter.Engine;
+        const Bodies = Matter.Bodies;
+        const Body = Matter.Body;
+        const Composite = Matter.Composite;
+        const Constraint = Matter.Constraint;
+        const Events = Matter.Events;
+        const Vector = Matter.Vector;
+
+        // Game Constants
+        const CANVAS_WIDTH = 1200;
+        const CANVAS_HEIGHT = 700;
+        const GROUND_HEIGHT = 100;
+        const CATAPULT_X = 150;
+        const CATAPULT_Y = CANVAS_HEIGHT - GROUND_HEIGHT - 100;
+
+        // Game State
+        let engine, canvas, ctx;
+        let currentLevel = 1;
+        let score = 0;
+        let shotsRemaining = 5;
+        let gameState = 'MENU';
+        let projectile = null;
+        let slingshotConstraint = null;
+        let targets = [];
+        let particles = [];
+        let isDragging = false;
+        let trajectoryPoints = [];
+
+        // Target types with different properties
+        const TARGET_TYPES = {
+            SMALL: { radius: 20, health: 1, points: 100, color: '#FF6B6B' },
+            MEDIUM: { radius: 30, health: 2, points: 200, color: '#4ECDC4' },
+            LARGE: { radius: 45, health: 3, points: 300, color: '#FFE66D' },
+            BOSS: { radius: 60, health: 5, points: 500, color: '#95E1D3' }
+        };
+
+        // Initialize the game
+        function init() {
+            canvas = document.getElementById('game-canvas');
+            ctx = canvas.getContext('2d');
+
+            showMessage('Catapult Commander', 'Destroy all targets to advance!', 'Start Game', startGame);
+
+            canvas.addEventListener('mousedown', handleMouseDown);
+            canvas.addEventListener('mousemove', handleMouseMove);
+            canvas.addEventListener('mouseup', handleMouseUp);
+            canvas.addEventListener('mouseleave', handleMouseUp);
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        function setupPhysics() {
+            engine = Engine.create();
+            engine.world.gravity.y = 1;
+
+            const ground = Bodies.rectangle(
+                CANVAS_WIDTH / 2,
+                CANVAS_HEIGHT - GROUND_HEIGHT / 2,
+                CANVAS_WIDTH,
+                GROUND_HEIGHT,
+                { isStatic: true, label: 'ground' }
+            );
+
+            const leftWall = Bodies.rectangle(0, CANVAS_HEIGHT / 2, 50, CANVAS_HEIGHT, {
+                isStatic: true, label: 'wall'
+            });
+
+            const rightWall = Bodies.rectangle(CANVAS_WIDTH, CANVAS_HEIGHT / 2, 50, CANVAS_HEIGHT, {
+                isStatic: true, label: 'wall'
+            });
+
+            Composite.add(engine.world, [ground, leftWall, rightWall]);
+            Events.on(engine, 'collisionStart', handleCollisions);
+        }
+
+        function createProjectile() {
+            if (projectile) Composite.remove(engine.world, projectile);
+
+            projectile = Bodies.circle(CATAPULT_X, CATAPULT_Y, 15, {
+                density: 0.004,
+                restitution: 0.5,
+                label: 'projectile'
+            });
+
+            Composite.add(engine.world, projectile);
+        }
+
+        function createSlingshot() {
+            if (slingshotConstraint) Composite.remove(engine.world, slingshotConstraint);
+
+            slingshotConstraint = Constraint.create({
+                pointA: { x: CATAPULT_X, y: CATAPULT_Y },
+                bodyB: projectile,
+                stiffness: 0.05,
+                damping: 0.01,
+                length: 0,
+                label: 'slingshot'
+            });
+
+            Composite.add(engine.world, slingshotConstraint);
+        }
+
+        function loadLevel(level) {
+            targets.forEach(target => {
+                if (target.body) Composite.remove(engine.world, target.body);
+            });
+            targets = [];
+
+            const numTargets = 5 + Math.floor(level * 1.5);
+            const targetTypes = Object.keys(TARGET_TYPES);
+            const structurePositions = generateStructurePositions(level);
+            
+            structurePositions.forEach((pos, index) => {
+                if (index >= numTargets) return;
+                
+                let typeIndex = 0;
+                const rand = Math.random();
+                
+                if (level >= 5 && rand < 0.1) typeIndex = 3;
+                else if (level >= 3 && rand < 0.25) typeIndex = 2;
+                else if (level >= 2 && rand < 0.4) typeIndex = 1;
+
+                const typeName = targetTypes[typeIndex];
+                const targetType = TARGET_TYPES[typeName];
+
+                const targetBody = Bodies.circle(pos.x, pos.y, targetType.radius, {
+                    density: 0.001,
+                    restitution: 0.3,
+                    label: 'target'
+                });
+
+                targetBody.health = targetType.health;
+                targetBody.maxHealth = targetType.health;
+                targetBody.points = targetType.points;
+
+                targets.push({ body: targetBody, type: targetType, typeName: typeName });
+                Composite.add(engine.world, targetBody);
+            });
+
+            createStructures(level);
+            shotsRemaining = Math.max(3, 8 - Math.floor(level / 2));
+            updateUI();
+        }
+
+        function generateStructurePositions(level) {
+            const positions = [];
+            const numStructures = 3 + Math.floor(level / 2);
+            
+            for (let i = 0; i < numStructures; i++) {
+                const baseX = 500 + (i * 200) + Math.random() * 100;
+                const baseY = CANVAS_HEIGHT - GROUND_HEIGHT;
+                const stackHeight = 1 + Math.floor(Math.random() * 3);
+                
+                for (let j = 0; j < stackHeight; j++) {
+                    positions.push({
+                        x: baseX + (Math.random() - 0.5) * 40,
+                        y: baseY - 30 - (j * 60) - Math.random() * 20
+                    });
+                }
+            }
+            
+            return positions;
+        }
+
+        function createStructures(level) {
+            const numBlocks = 5 + level * 2;
+
+            for (let i = 0; i < numBlocks; i++) {
+                const x = 400 + Math.random() * 600;
+                const y = CANVAS_HEIGHT - GROUND_HEIGHT - 30 - Math.random() * 200;
+                const width = 60 + Math.random() * 40;
+                const height = 20 + Math.random() * 30;
+
+                const block = Bodies.rectangle(x, y, width, height, {
+                    density: 0.002,
+                    label: 'block'
+                });
+
+                Composite.add(engine.world, block);
+            }
+        }
+
+        function handleMouseDown(e) {
+            if (gameState !== 'PLAYING' || shotsRemaining <= 0 || !projectile) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+            const dist = Vector.magnitude(Vector.sub({ x: mouseX, y: mouseY }, projectile.position));
+            
+            if (dist < 50) {
+                isDragging = true;
+                
+                if (!slingshotConstraint) {
+                    createSlingshot();
+                    Body.setPosition(projectile, { x: CATAPULT_X, y: CATAPULT_Y });
+                    Body.setVelocity(projectile, { x: 0, y: 0 });
+                    Body.setAngularVelocity(projectile, 0);
+                }
+            }
+        }
+
+        function handleMouseMove(e) {
+            if (!isDragging) {
+                updateTrajectory();
+                return;
+            }
+
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+            const maxDrag = 100;
+            const dragVector = Vector.sub({ x: mouseX, y: mouseY }, { x: CATAPULT_X, y: CATAPULT_Y });
+            const dragLength = Vector.magnitude(dragVector);
+            
+            if (dragLength > maxDrag) {
+                const normalized = Vector.normalise(dragVector);
+                const limitedDrag = Vector.mult(normalized, maxDrag);
+                Body.setPosition(projectile, Vector.add({ x: CATAPULT_X, y: CATAPULT_Y }, limitedDrag));
+            } else {
+                Body.setPosition(projectile, { x: mouseX, y: mouseY });
+            }
+
+            Body.setVelocity(projectile, { x: 0, y: 0 });
+            Body.setAngularVelocity(projectile, 0);
+        }
+
+        function handleMouseUp() {
+            if (!isDragging) return;
+            
+            isDragging = false;
+            const dragVector = Vector.sub({ x: CATAPULT_X, y: CATAPULT_Y }, projectile.position);
+            const launchForce = Vector.mult(dragVector, 0.025);
+
+            if (slingshotConstraint) {
+                Composite.remove(engine.world, slingshotConstraint);
+                slingshotConstraint = null;
+            }
+
+            Body.applyForce(projectile, projectile.position, launchForce);
+            shotsRemaining--;
+            updateUI();
+            setTimeout(checkShotComplete, 3000);
+        }
+
+        function updateTrajectory() {
+            trajectoryPoints = [];
+            
+            if (!projectile || isDragging) {
+                const pos = projectile ? projectile.position : { x: CATAPULT_X, y: CATAPULT_Y };
+                const dragVector = Vector.sub({ x: CATAPULT_X, y: CATAPULT_Y }, pos);
+                const launchForce = Vector.mult(dragVector, 0.025);
+                const launchVelocity = Vector.div(launchForce, projectile ? projectile.mass : 0.1);
+                simulateTrajectory(pos, launchVelocity);
+            } else {
+                simulateTrajectory({ x: CATAPULT_X, y: CATAPULT_Y }, { x: 0, y: -5 });
+            }
+        }
+
+        function simulateTrajectory(startPos, startVelocity) {
+            const gravity = engine.world.gravity.y * engine.timing.timeScale;
+            let pos = { ...startPos };
+            let vel = { ...startVelocity };
+            
+            for (let i = 0; i < 20; i++) {
+                trajectoryPoints.push({ x: pos.x, y: pos.y });
+                vel.y += gravity * 0.5;
+                pos.x += vel.x * 0.5;
+                pos.y += vel.y * 0.5;
+                if (pos.y > CANVAS_HEIGHT - GROUND_HEIGHT) break;
+            }
+        }
+
+        function checkShotComplete() {
+            if (gameState !== 'PLAYING' || !projectile) return;
+
+            const speed = Vector.magnitude(projectile.velocity);
+            const isOffScreen = projectile.position.x > CANVAS_WIDTH || 
+                               projectile.position.x < 0 ||
+                               projectile.position.y > CANVAS_HEIGHT;
+
+            if (speed < 0.5 || isOffScreen) {
+                setTimeout(() => {
+                    if (projectile) {
+                        Composite.remove(engine.world, projectile);
+                        projectile = null;
+                    }
+                    
+                    if (shotsRemaining > 0 && targets.length > 0) {
+                        createProjectile();
+                        createSlingshot();
+                    }
+                }, 500);
+            }
+
+            checkLevelStatus();
+        }
+
+        function handleCollisions(event) {
+            event.pairs.forEach(pair => {
+                [pair.bodyA, pair.bodyB].forEach(body => {
+                    if (body.label === 'target' && body.health > 0) {
+                        const collisionSpeed = Vector.magnitude(
+                            Vector.sub(pair.bodyA.velocity, pair.bodyB.velocity)
+                        );
+
+                        if (collisionSpeed > 2) {
+                            damageTarget(body, Math.ceil(collisionSpeed / 5));
+                        }
+                    }
+                });
+            });
+        }
+
+        function damageTarget(target, damage) {
+            if (target.health <= 0) return;
+            target.health -= damage;
+            createParticles(target.position.x, target.position.y, target.render.fillStyle || '#FF6B6B', 5);
+
+            if (target.health <= 0) destroyTarget(target);
+        }
+
+        function destroyTarget(target) {
+            const index = targets.findIndex(t => t.body === target);
+            if (index === -1) return;
+
+            const targetData = targets[index];
+            score += targetData.points;
+            
+            const recentDestructions = particles.filter(p => p.type === 'destruction').length;
+            if (recentDestructions > 0) {
+                const bonus = Math.floor(targetData.points * 0.5 * recentDestructions);
+                score += bonus;
+                showFloatingText(`+${bonus} COMBO!`, target.position.x, target.position.y);
+            }
+
+            createParticles(target.position.x, target.position.y, targetData.type.color, 20, 'destruction');
+            Composite.remove(engine.world, target);
+            targets.splice(index, 1);
+            updateUI();
+            checkLevelStatus();
+        }
+
+        function createParticles(x, y, color, count, type = 'hit') {
+            for (let i = 0; i < count; i++) {
+                const angle = (Math.PI * 2 / count) * i;
+                const speed = 2 + Math.random() * 4;
+                
+                particles.push({
+                    x, y,
+                    vx: Math.cos(angle) * speed,
+                    vy: Math.sin(angle) * speed,
+                    life: 1,
+                    decay: 0.02 + Math.random() * 0.02,
+                    color,
+                    size: 3 + Math.random() * 4,
+                    type
+                });
+            }
+        }
+
+        function showFloatingText(text, x, y) {
+            particles.push({
+                x, y, vx: 0, vy: -2,
+                life: 1, decay: 0.015,
+                text, isText: true
+            });
+        }
+
+        function checkLevelStatus() {
+            if (targets.length === 0) {
+                const bonus = shotsRemaining * 50;
+                score += bonus;
+                
+                setTimeout(() => {
+                    currentLevel++;
+                    showMessage('Level Complete!', `Score: ${score} | Bonus: ${bonus}`, 'Next Level', () => {
+                        loadLevel(currentLevel);
+                        createProjectile();
+                        createSlingshot();
+                        gameState = 'PLAYING';
+                        hideMessage();
+                    });
+                    gameState = 'LEVEL_COMPLETE';
+                }, 1000);
+            } else if (shotsRemaining <= 0 && !projectile) {
+                setTimeout(() => {
+                    showMessage('Game Over', `Final Score: ${score} | Level: ${currentLevel}`, 'Play Again', restartGame);
+                    gameState = 'GAME_OVER';
+                }, 1000);
+            }
+        }
+
+        function updateUI() {
+            document.getElementById('level-display').textContent = currentLevel;
+            document.getElementById('score-display').textContent = score;
+            document.getElementById('shots-display').textContent = shotsRemaining;
+        }
+
+        function showMessage(title, text, buttonText, callback) {
+            const overlay = document.getElementById('message-overlay');
+            document.getElementById('message-title').textContent = title;
+            document.getElementById('message-text').textContent = text;
+            const button = document.getElementById('action-button');
+            button.textContent = buttonText;
+            button.onclick = () => { if (callback) callback(); };
+            overlay.style.display = 'block';
+        }
+
+        function hideMessage() {
+            document.getElementById('message-overlay').style.display = 'none';
+        }
+
+        function startGame() {
+            setupPhysics();
+            currentLevel = 1;
+            score = 0;
+            loadLevel(currentLevel);
+            createProjectile();
+            createSlingshot();
+            gameState = 'PLAYING';
+            hideMessage();
+            updateUI();
+        }
+
+        function restartGame() {
+            Composite.clear(engine.world, false);
+            setupPhysics();
+            currentLevel = 1;
+            score = 0;
+            loadLevel(currentLevel);
+            createProjectile();
+            createSlingshot();
+            gameState = 'PLAYING';
+            hideMessage();
+            updateUI();
+        }
+
+        function drawCatapult() {
+            ctx.save();
+            
+            ctx.fillStyle = '#8B4513';
+            ctx.beginPath();
+            ctx.arc(CATAPULT_X, CATAPULT_Y + 50, 30, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.strokeStyle = '#654321';
+            ctx.lineWidth = 8;
+            ctx.beginPath();
+            ctx.moveTo(CATAPULT_X, CATAPULT_Y + 50);
+            
+            if (projectile && slingshotConstraint) {
+                ctx.lineTo(projectile.position.x, projectile.position.y);
+            } else {
+                ctx.lineTo(CATAPULT_X - 40, CATAPULT_Y);
+            }
+            ctx.stroke();
+
+            ctx.fillStyle = '#4a3728';
+            ctx.beginPath();
+            if (projectile && slingshotConstraint) {
+                ctx.arc(projectile.position.x, projectile.position.y, 20, 0, Math.PI * 2);
+            } else {
+                ctx.arc(CATAPULT_X - 40, CATAPULT_Y, 20, 0, Math.PI * 2);
+            }
+            ctx.fill();
+
+            ctx.restore();
+        }
+
+        function drawTrajectory() {
+            if (trajectoryPoints.length < 2) return;
+
+            ctx.save();
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+            ctx.lineWidth = 3;
+            ctx.setLineDash([10, 10]);
+            
+            ctx.beginPath();
+            ctx.moveTo(trajectoryPoints[0].x, trajectoryPoints[0].y);
+            
+            for (let i = 1; i < trajectoryPoints.length; i++) {
+                ctx.lineTo(trajectoryPoints[i].x, trajectoryPoints[i].y);
+            }
+            
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        function drawParticles() {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                
+                if (p.isText) {
+                    ctx.save();
+                    ctx.fillStyle = `rgba(255, 215, 0, ${p.life})`;
+                    ctx.font = 'bold 20px Arial';
+                    ctx.fillText(p.text, p.x, p.y);
+                    ctx.restore();
+                } else {
+                    ctx.save();
+                    ctx.globalAlpha = p.life;
+                    ctx.fillStyle = p.color;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                }
+
+                p.x += p.vx;
+                p.y += p.vy;
+                p.vy += 0.1;
+                p.life -= p.decay;
+
+                if (p.life <= 0) particles.splice(i, 1);
+            }
+        }
+
+        function drawHealthBars() {
+            targets.forEach(target => {
+                if (target.body.health < target.body.maxHealth) {
+                    const x = target.body.position.x - 25;
+                    const y = target.body.position.y - target.body.circleRadius - 15;
+                    
+                    ctx.fillStyle = '#333';
+                    ctx.fillRect(x, y, 50, 8);
+                    
+                    const healthPercent = target.body.health / target.body.maxHealth;
+                    ctx.fillStyle = healthPercent > 0.5 ? '#4CAF50' : healthPercent > 0.25 ? '#FFC107' : '#F44336';
+                    ctx.fillRect(x, y, 50 * healthPercent, 8);
+                }
+            });
+        }
+
+        function gameLoop() {
+            if (engine && gameState === 'PLAYING') {
+                Engine.update(engine, 1000 / 60);
+            }
+
+            ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+            // Draw clouds
+            ctx.save();
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+            ctx.beginPath();
+            ctx.arc(200, 100, 40, 0, Math.PI * 2);
+            ctx.arc(250, 100, 50, 0, Math.PI * 2);
+            ctx.arc(300, 100, 40, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(700, 80, 30, 0, Math.PI * 2);
+            ctx.arc(740, 80, 40, 0, Math.PI * 2);
+            ctx.arc(780, 80, 30, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+
+            // Draw ground
+            ctx.save();
+            const groundGradient = ctx.createLinearGradient(0, CANVAS_HEIGHT - GROUND_HEIGHT, 0, CANVAS_HEIGHT);
+            groundGradient.addColorStop(0, '#4CAF50');
+            groundGradient.addColorStop(1, '#2D5016');
+            ctx.fillRect(0, CANVAS_HEIGHT - GROUND_HEIGHT, CANVAS_WIDTH, GROUND_HEIGHT);
+            
+            ctx.fillStyle = '#66BB6A';
+            for (let i = 0; i < CANVAS_WIDTH; i += 20) {
+                ctx.beginPath();
+                ctx.moveTo(i, CANVAS_HEIGHT - GROUND_HEIGHT);
+                ctx.lineTo(i + 10, CANVAS_HEIGHT - GROUND_HEIGHT - 10);
+                ctx.lineTo(i + 20, CANVAS_HEIGHT - GROUND_HEIGHT);
+                ctx.fill();
+            }
+            ctx.restore();
+
+            if (gameState === 'PLAYING') drawTrajectory();
+
+            if (engine) {
+                const bodies = Composite.allBodies(engine.world);
+                
+                bodies.forEach(body => {
+                    if ((body.label === 'projectile' && body === projectile) || 
+                        body.label === 'ground' || body.label === 'wall') return;
+
+                    ctx.save();
+                    ctx.translate(body.position.x, body.position.y);
+                    ctx.rotate(body.angle);
+
+                    if (body.label === 'target') {
+                        ctx.fillStyle = body.render?.fillStyle || '#FF6B6B';
+                        ctx.beginPath();
+                        ctx.arc(0, 0, body.circleRadius, 0, Math.PI * 2);
+                        ctx.fill();
+                        
+                        ctx.fillStyle = '#000';
+                        ctx.beginPath();
+                        ctx.arc(-body.circleRadius * 0.3, -body.circleRadius * 0.2, body.circleRadius * 0.15, 0, Math.PI * 2);
+                        ctx.arc(body.circleRadius * 0.3, -body.circleRadius * 0.2, body.circleRadius * 0.15, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.beginPath();
+                        ctx.arc(0, body.circleRadius * 0.2, body.circleRadius * 0.25, 0, Math.PI, false);
+                        ctx.stroke();
+                    } else if (body.label === 'block') {
+                        ctx.fillStyle = body.render?.fillStyle || '#8B4513';
+                        const vertices = body.vertices;
+                        ctx.beginPath();
+                        ctx.moveTo(vertices[0].x - body.position.x, vertices[0].y - body.position.y);
+                        for (let j = 1; j < vertices.length; j++) {
+                            ctx.lineTo(vertices[j].x - body.position.x, vertices[j].y - body.position.y);
+                        }
+                        ctx.closePath();
+                        ctx.fill();
+                        ctx.strokeStyle = '#5D2906';
+                        ctx.lineWidth = 2;
+                        ctx.stroke();
+                    }
+
+                    ctx.restore();
+                });
+            }
+
+            if (projectile) {
+                ctx.save();
+                ctx.translate(projectile.position.x, projectile.position.y);
+                ctx.rotate(projectile.angle);
+                
+                ctx.fillStyle = '#333';
+                ctx.beginPath();
+                ctx.arc(0, 0, 15, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+                ctx.beginPath();
+                ctx.arc(-5, -5, 5, 0, Math.PI * 2);
+                ctx.fill();
+                
+                ctx.restore();
+            }
+
+            drawCatapult();
+            drawHealthBars();
+            drawParticles();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>
